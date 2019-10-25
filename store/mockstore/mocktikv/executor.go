@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
+	"github.com/pingcap/tidb/util/bloom"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tipb/go-tipb"
@@ -39,6 +40,7 @@ var (
 	_ executor = &selectionExec{}
 	_ executor = &limitExec{}
 	_ executor = &topNExec{}
+	_ executor = &bloomFilterExec{}
 )
 
 type execDetail struct {
@@ -719,4 +721,98 @@ func convertToExprs(sc *stmtctx.StatementContext, fieldTps []*types.FieldType, p
 		exprs = append(exprs, e)
 	}
 	return exprs, nil
+}
+
+type bloomFilterExec struct {
+	bf                *bloom.BloomFilter
+	relatedColOffsets []int64
+	evalCtx           *evalContext
+	src               executor
+	execDetail        *execDetail
+	// row               []types.Datum
+}
+
+func (e *bloomFilterExec) ExecDetails() []*execDetail {
+	var suffix []*execDetail
+	if e.src != nil {
+		suffix = e.src.ExecDetails()
+	}
+	return append(suffix, e.execDetail)
+}
+
+func (e *bloomFilterExec) SetSrcExec(exec executor) {
+	e.src = exec
+}
+
+func (e *bloomFilterExec) GetSrcExec() executor {
+	return e.src
+}
+
+func (e *bloomFilterExec) ResetCounts() {
+	e.src.ResetCounts()
+}
+
+func (e *bloomFilterExec) Counts() []int64 {
+	return e.src.Counts()
+}
+
+func (e *bloomFilterExec) Cursor() ([]byte, bool) {
+	return e.src.Cursor()
+}
+
+func (e *bloomFilterExec) Next(ctx context.Context) (value [][]byte, err error) {
+	defer func(begin time.Time) {
+		e.execDetail.update(begin, value)
+	}(time.Now())
+	for {
+		value, err = e.src.Next(ctx)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if value == nil {
+			return nil, nil
+		}
+
+		// if any of the attribute is null, continue
+		flag, err := checkIsNull(e.evalCtx, value, e.relatedColOffsets)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if flag {
+			continue
+		}
+
+		key := buildKey(value, e.relatedColOffsets)
+		match := e.bf.Probe(key)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if match {
+			return value, nil
+		}
+	}
+}
+
+// return true, if any one of the choice attributes value is null.
+// return false on all attributes value is not null.
+func checkIsNull(e *evalContext, value [][]byte, relatedColOffsets []int64) (bool, error) {
+	for _, offset := range relatedColOffsets {
+		data, err := tablecodec.DecodeColumnValue(value[offset], e.fieldTps[offset], e.sc.TimeZone)
+		if err != nil {
+			return true, errors.Trace(err)
+		}
+		if data.IsNull() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// build the key for probe the bloom filter, by concatenate related col's value.
+func buildKey(value [][]byte, relatedColOffsets []int64) []byte {
+	var key []byte
+	for _, offset := range relatedColOffsets {
+		key = append(key, value[offset]...)
+	}
+	return key
 }

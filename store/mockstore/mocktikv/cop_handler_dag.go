@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
+	"github.com/pingcap/tidb/util/bloom"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/codec"
 	mockpkg "github.com/pingcap/tidb/util/mock"
@@ -157,6 +158,8 @@ func (h *rpcHandler) buildExec(ctx *dagContext, curr *tipb.Executor) (executor, 
 		currExec, err = h.buildIndexScan(ctx, curr)
 	case tipb.ExecType_TypeSelection:
 		currExec, err = h.buildSelection(ctx, curr)
+	case tipb.ExecType_TypeBloomFilter:
+		currExec, err = h.buildBloomFilterExec(ctx, curr)
 	case tipb.ExecType_TypeAggregation:
 		currExec, err = h.buildHashAgg(ctx, curr)
 	case tipb.ExecType_TypeStreamAgg:
@@ -246,6 +249,18 @@ func (h *rpcHandler) buildIndexScan(ctx *dagContext, executor *tipb.Executor) (*
 		e.counts = make([]int64, len(ranges))
 	}
 	return e, nil
+}
+
+func (h *rpcHandler) buildBloomFilterExec(ctx *dagContext, executor *tipb.Executor) (*bloomFilterExec, error) {
+	relatedColumnOffsets := executor.BloomFilter.GetColIdx()
+	filter, _ := bloom.NewBloomFilterBySlice(executor.BloomFilter.GetBitSet())
+
+	return &bloomFilterExec{
+		bf:                filter,
+		relatedColOffsets: relatedColumnOffsets,
+		evalCtx:           ctx.evalCtx,
+		execDetail:        new(execDetail),
+	}, nil
 }
 
 func (h *rpcHandler) buildSelection(ctx *dagContext, executor *tipb.Executor) (*selectionExec, error) {
