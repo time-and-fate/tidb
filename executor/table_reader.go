@@ -16,6 +16,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/parser/model"
@@ -72,6 +73,10 @@ type TableReaderExecutor struct {
 	memTracker       *memory.Tracker
 	selectResultHook // for testing
 
+	// bloomFilter is built in hash join executor before `Open` is called here.
+	bloomFilter []uint64
+	joinKeyIdx  []int64
+
 	keepOrder bool
 	desc      bool
 	streaming bool
@@ -100,6 +105,15 @@ func (e *TableReaderExecutor) Open(ctx context.Context) error {
 			return err
 		}
 	}
+
+	if e.bloomFilter != nil {
+		bfExec := &tipb.BloomFilter{
+			BitSet: e.bloomFilter,
+			ColIdx: e.joinKeyIdx,
+		}
+		e.dagPB.Executors = append(e.dagPB.Executors, &tipb.Executor{Tp: tipb.ExecType_TypeBloomFilter, BloomFilter: bfExec})
+	}
+
 	if e.runtimeStats != nil {
 		collExec := true
 		e.dagPB.CollectExecutionSummaries = &collExec
@@ -157,6 +171,7 @@ func (e *TableReaderExecutor) Next(ctx context.Context, req *chunk.Chunk) error 
 		e.feedback.Invalidate()
 		return err
 	}
+	time.Sleep(time.Millisecond)
 	return nil
 }
 

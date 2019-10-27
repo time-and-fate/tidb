@@ -16,6 +16,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"sync"
 	"sync/atomic"
 
@@ -24,6 +25,8 @@ import (
 	"github.com/pingcap/tidb/config"
 	"github.com/pingcap/tidb/expression"
 	plannercore "github.com/pingcap/tidb/planner/core"
+	"github.com/pingcap/tidb/tablecodec"
+	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/memory"
@@ -66,6 +69,11 @@ type HashJoinExec struct {
 	outerResultChs     []chan *chunk.Chunk
 	joinChkResourceCh  []chan *chunk.Chunk
 	joinResultCh       chan *hashjoinWorkerResult
+
+	// bloomFilter will be built from inner table and sent to outer table
+	// data source to "pre-filter" data.
+	// bloomFilter is initialized in executor builder.
+	bloomFilter []uint64
 
 	memTracker  *memory.Tracker // track memory usage.
 	prepared    bool
@@ -128,7 +136,7 @@ func (e *HashJoinExec) Close() error {
 
 // Open implements the Executor Open interface.
 func (e *HashJoinExec) Open(ctx context.Context) error {
-	if err := e.baseExecutor.Open(ctx); err != nil {
+	if err := e.innerExec.Open(ctx); err != nil {
 		return err
 	}
 
@@ -166,18 +174,11 @@ func (e *HashJoinExec) fetchOuterChunks(ctx context.Context) {
 			required := int(atomic.LoadInt64(&e.requiredRows))
 			outerResult.SetRequiredRows(required, e.maxChunkSize)
 		}
-		err := Next(ctx, e.outerExec, outerResult)
-		if err != nil {
-			e.joinResultCh <- &hashjoinWorkerResult{
-				err: err,
-			}
-			return
-		}
 		if !hasWaitedForInner {
-			if outerResult.NumRows() == 0 {
-				e.finished.Store(true)
-				return
-			}
+			// if outerResult.NumRows() == 0 {
+			// 	e.finished.Store(true)
+			// 	return
+			// }
 			jobFinished, innerErr := e.wait4Inner()
 			if innerErr != nil {
 				e.joinResultCh <- &hashjoinWorkerResult{
@@ -188,6 +189,13 @@ func (e *HashJoinExec) fetchOuterChunks(ctx context.Context) {
 				return
 			}
 			hasWaitedForInner = true
+		}
+		err := Next(ctx, e.outerExec, outerResult)
+		if err != nil {
+			e.joinResultCh <- &hashjoinWorkerResult{
+				err: err,
+			}
+			return
 		}
 
 		if outerResult.NumRows() == 0 {
@@ -487,6 +495,12 @@ func (e *HashJoinExec) fetchInnerAndBuildHashTable(ctx context.Context) {
 		e.innerFinished <- errors.Trace(err)
 		close(doneCh)
 	}
+
+	if err := e.outerExec.Open(ctx); err != nil {
+		e.innerFinished <- errors.Trace(err)
+		close(doneCh)
+	}
+
 	// Wait fetchInnerRows be finished.
 	// 1. if buildHashTableForList fails
 	// 2. if outerResult.NumRows() == 0, fetchOutChunks will not wait for inner.
@@ -520,6 +534,37 @@ func (e *HashJoinExec) buildHashTableForList(innerResultCh <-chan *chunk.Chunk) 
 		if err != nil {
 			return err
 		}
+		if e.bloomFilter != nil {
+			err = e.putChunk2BloomFilter(chk, innerKeyColIdx, allTypes)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (e *HashJoinExec) putChunk2BloomFilter(chk *chunk.Chunk, innerKeyColIdx []int, allTypes []*types.FieldType) error {
+	// We use []uint64 as bit array for bloom filter, a single uint64 is a unit
+	bfUnitLen := uint64(64) // a uint64 has 64 bits
+	bfUnitsNum := uint64(len(e.bloomFilter))
+	bfBitLen := bfUnitLen * bfUnitsNum
+
+	numRows := chk.NumRows()
+	for i := 0; i <= numRows-1; i++ {
+		row := chk.GetRow(i)
+		hasher := fnv.New64a()
+		for _, colIdx := range innerKeyColIdx {
+			datum := row.GetDatum(colIdx, allTypes[colIdx])
+			encoded, err := tablecodec.EncodeValue(e.ctx.GetSessionVars().StmtCtx, nil, datum)
+			if err != nil {
+				return err
+			}
+			_, _ = hasher.Write(encoded)
+		}
+		hashSum := hasher.Sum64()
+		hashSum %= bfBitLen
+		e.bloomFilter[hashSum/bfUnitLen] |= 1 << (hashSum % bfUnitLen)
 	}
 	return nil
 }
