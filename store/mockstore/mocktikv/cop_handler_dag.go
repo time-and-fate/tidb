@@ -253,7 +253,10 @@ func (h *rpcHandler) buildIndexScan(ctx *dagContext, executor *tipb.Executor) (*
 
 func (h *rpcHandler) buildBloomFilterExec(ctx *dagContext, executor *tipb.Executor) (*bloomFilterExec, error) {
 	relatedColumnOffsets := executor.BloomFilter.GetColIdx()
-	filter, _ := bloom.NewBloomFilterBySlice(executor.BloomFilter.GetBitSet())
+	filter, err := bloom.NewFilterBySlice(executor.BloomFilter.GetBitSet())
+	if err != nil {
+		return nil, err
+	}
 
 	return &bloomFilterExec{
 		bf:                filter,

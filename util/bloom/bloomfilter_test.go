@@ -1,36 +1,37 @@
 package bloom
 
 import (
-	"github.com/pingcap/check"
 	"testing"
+
+	"github.com/pingcap/check"
 )
 
 func TestT(t *testing.T) {
 	check.TestingT(t)
 }
 
-var _ = check.Suite(&testBloomFilterSuite{})
+var _ = check.Suite(&testFilterSuite{})
 
-type testBloomFilterSuite struct{}
+type testFilterSuite struct{}
 
-func (s *testBloomFilterSuite) TestNewBloomFilter(c *check.C) {
-	_, err1 := NewBloomFilter(0)
+func (s *testFilterSuite) TestNewFilter(c *check.C) {
+	_, err1 := NewFilter(0)
 	c.Assert(err1, check.NotNil)
 
-	_, err2 := NewBloomFilter(10)
+	_, err2 := NewFilter(10)
 	c.Assert(err2, check.IsNil)
 }
 
-func (s *testBloomFilterSuite) TestNewBloomFilterBySlice(c *check.C) {
-	_, err1 := NewBloomFilterBySlice(make([]uint64, 0))
+func (s *testFilterSuite) TestNewFilterBySlice(c *check.C) {
+	_, err1 := NewFilterBySlice(make([]uint64, 0))
 	c.Assert(err1, check.NotNil)
 
-	_, err2 := NewBloomFilterBySlice(make([]uint64, 10))
+	_, err2 := NewFilterBySlice(make([]uint64, 10))
 	c.Assert(err2, check.IsNil)
 }
 
-func (s *testBloomFilterSuite) TestBasic(c *check.C) {
-	bf, _ := NewBloomFilterBySlice(make([]uint64, 10))
+func (s *testFilterSuite) TestBasic(c *check.C) {
+	bf, _ := NewFilterBySlice(make([]uint64, 10))
 	bf.Insert([]byte("Heading"))
 	bf.Insert([]byte("towards"))
 	bf.Insert([]byte("the"))
@@ -101,7 +102,7 @@ func (s *testBloomFilterSuite) TestBasic(c *check.C) {
 
 func BenchmarkBloomInsert(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		bf, _ := NewBloomFilterBySlice(make([]uint64, 10))
+		bf, _ := NewFilterBySlice(make([]uint64, 10))
 		bf.Insert([]byte("Heading"))
 		bf.Insert([]byte("towards"))
 		bf.Insert([]byte("the"))
@@ -111,7 +112,7 @@ func BenchmarkBloomInsert(b *testing.B) {
 }
 
 func BenchmarkBloom(b *testing.B) {
-	bf, _ := NewBloomFilterBySlice(make([]uint64, 10))
+	bf, _ := NewFilterBySlice(make([]uint64, 10))
 	bf.Insert([]byte("Heading"))
 	bf.Insert([]byte("towards"))
 	bf.Insert([]byte("the"))

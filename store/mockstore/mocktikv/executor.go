@@ -725,7 +725,7 @@ func convertToExprs(sc *stmtctx.StatementContext, fieldTps []*types.FieldType, p
 }
 
 type bloomFilterExec struct {
-	bf                *bloom.BloomFilter
+	bf                *bloom.Filter
 	relatedColOffsets []int64
 	evalCtx           *evalContext
 	src               executor
