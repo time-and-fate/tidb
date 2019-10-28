@@ -727,10 +727,8 @@ func convertToExprs(sc *stmtctx.StatementContext, fieldTps []*types.FieldType, p
 type bloomFilterExec struct {
 	bf                *bloom.Filter
 	relatedColOffsets []int64
-	evalCtx           *evalContext
 	src               executor
 	execDetail        *execDetail
-	// row               []types.Datum
 	match float32
 	total float32
 }
@@ -778,7 +776,7 @@ func (e *bloomFilterExec) Next(ctx context.Context) (value [][]byte, err error) 
 		}
 
 		// if any of the attribute is null, continue
-		flag := checkIsNull(e.evalCtx, value, e.relatedColOffsets)
+		flag := checkIsNull(value, e.relatedColOffsets)
 		if flag {
 			continue
 		}
@@ -793,17 +791,9 @@ func (e *bloomFilterExec) Next(ctx context.Context) (value [][]byte, err error) 
 	}
 }
 
-// return true, if any one of the choice attributes value is null.
-// return false on all attributes value is not null.
-func checkIsNull(e *evalContext, value [][]byte, relatedColOffsets []int64) bool {
+// return true, if any one of the choice attributes value is null. else return false.
+func checkIsNull(value [][]byte, relatedColOffsets []int64) bool {
 	for _, offset := range relatedColOffsets {
-		// data, err := tablecodec.DecodeColumnValue(value[offset], e.fieldTps[offset], e.sc.TimeZone)
-		// if err != nil {
-		// 	return true, errors.Trace(err)
-		// }
-		// if data.IsNull() {
-		// 	return true, nil
-		// }
 		if value[offset][0] == codec.NilFlag {
 			return true
 		}

@@ -261,7 +261,6 @@ func (h *rpcHandler) buildBloomFilterExec(ctx *dagContext, executor *tipb.Execut
 	return &bloomFilterExec{
 		bf:                filter,
 		relatedColOffsets: relatedColumnOffsets,
-		evalCtx:           ctx.evalCtx,
 		execDetail:        new(execDetail),
 	}, nil
 }
