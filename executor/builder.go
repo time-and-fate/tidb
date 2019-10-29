@@ -1033,6 +1033,20 @@ func (b *executorBuilder) buildHashJoin(v *plannercore.PhysicalHashJoin) Executo
 			defaultValues = make([]types.Datum, e.innerExec.Schema().Len())
 		}
 	}
+
+	if e.joinType == plannercore.InnerJoin || e.joinType == plannercore.SemiJoin {
+		if outerReader, ok := e.outerExec.(*TableReaderExecutor); ok {
+			bfSize := uint64(20)
+			e.bloomFilter = make([]uint64, bfSize)
+			outerReader.bloomFilter = e.bloomFilter
+
+			outerReader.joinKeyIdx = make([]int64, len(e.outerKeys))
+			for i := range e.innerKeys {
+				outerReader.joinKeyIdx[i] = int64(e.outerKeys[i].Index)
+			}
+		}
+	}
+
 	e.joiners = make([]joiner, e.concurrency)
 	for i := uint(0); i < e.concurrency; i++ {
 		e.joiners[i] = newJoiner(b.ctx, v.JoinType, v.InnerChildIdx == 0, defaultValues,
