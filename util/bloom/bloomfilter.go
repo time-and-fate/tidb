@@ -7,9 +7,9 @@ import (
 
 // Filter a simple abstraction of bloom filter
 type Filter struct {
-	bitSet   []uint64
-	length   uint64
-	unitSize uint64
+	BitSet   []uint64
+	Length   uint64
+	UnitSize uint64
 }
 
 // NewFilter returns a filter with a given size
@@ -20,9 +20,9 @@ func NewFilter(length int) (*Filter, error) {
 	bitset := make([]uint64, length)
 	bits := uint64(64)
 	return &Filter{
-		bitSet:   bitset,
-		length:   bits * uint64(length),
-		unitSize: bits,
+		BitSet:   bitset,
+		Length:   bits * uint64(length),
+		UnitSize: bits,
 	}, nil
 }
 
@@ -34,29 +34,29 @@ func NewFilterBySlice(bs []uint64) (*Filter, error) {
 
 	bits := uint64(64)
 	return &Filter{
-		bitSet:   bs,
-		length:   bits * uint64(len(bs)),
-		unitSize: bits,
+		BitSet:   bs,
+		Length:   bits * uint64(len(bs)),
+		UnitSize: bits,
 	}, nil
 }
 
 // Insert a key into the filter
 func (bf *Filter) Insert(key []byte) {
 	idx, shift := bf.hash(key)
-	bf.bitSet[idx] |= 1 << shift
+	bf.BitSet[idx] |= 1 << shift
 }
 
 // Probe check whether the given key is in the filter
 func (bf *Filter) Probe(key []byte) bool {
 	idx, shift := bf.hash(key)
 
-	return bf.bitSet[idx]&(1<<shift) != 0
+	return bf.BitSet[idx]&(1<<shift) != 0
 }
 
 func (bf *Filter) hash(key []byte) (uint64, uint64) {
-	hash := ihash(key) % uint64(bf.length)
-	idx := hash / bf.unitSize
-	shift := hash % bf.unitSize
+	hash := ihash(key) % uint64(bf.Length)
+	idx := hash / bf.UnitSize
+	shift := hash % bf.UnitSize
 
 	return idx, shift
 }

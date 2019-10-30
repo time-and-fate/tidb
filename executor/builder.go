@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/admin"
+	"github.com/pingcap/tidb/util/bloom"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/execdetails"
 	"github.com/pingcap/tidb/util/ranger"
@@ -1036,8 +1037,11 @@ func (b *executorBuilder) buildHashJoin(v *plannercore.PhysicalHashJoin) Executo
 
 	if e.joinType == plannercore.InnerJoin || e.joinType == plannercore.SemiJoin {
 		if outerReader, ok := e.outerExec.(*TableReaderExecutor); ok {
-			bfSize := uint64(20)
-			e.bloomFilter = make([]uint64, bfSize)
+			bf, err := bloom.NewFilter(20)
+			if err != nil {
+				return nil
+			}
+			e.bloomFilter = bf
 			outerReader.bloomFilter = e.bloomFilter
 
 			outerReader.joinKeyIdx = make([]int64, len(e.outerKeys))

@@ -16,7 +16,6 @@ package executor
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"sync"
 	"sync/atomic"
 
@@ -28,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util"
+	"github.com/pingcap/tidb/util/bloom"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/memory"
 	"github.com/pingcap/tidb/util/stringutil"
@@ -73,7 +73,7 @@ type HashJoinExec struct {
 	// bloomFilter will be built from inner table and sent to outer table
 	// data source to "pre-filter" data.
 	// bloomFilter is initialized in executor builder.
-	bloomFilter []uint64
+	bloomFilter *bloom.Filter
 
 	memTracker  *memory.Tracker // track memory usage.
 	prepared    bool
@@ -545,26 +545,19 @@ func (e *HashJoinExec) buildHashTableForList(innerResultCh <-chan *chunk.Chunk) 
 }
 
 func (e *HashJoinExec) putChunk2BloomFilter(chk *chunk.Chunk, innerKeyColIdx []int, allTypes []*types.FieldType) error {
-	// We use []uint64 as bit array for bloom filter, a single uint64 is a unit
-	bfUnitLen := uint64(64) // a uint64 has 64 bits
-	bfUnitsNum := uint64(len(e.bloomFilter))
-	bfBitLen := bfUnitLen * bfUnitsNum
-
 	numRows := chk.NumRows()
 	for i := 0; i <= numRows-1; i++ {
 		row := chk.GetRow(i)
-		hasher := fnv.New64a()
+		key := make([]byte, 0)
 		for _, colIdx := range innerKeyColIdx {
 			datum := row.GetDatum(colIdx, allTypes[colIdx])
 			encoded, err := tablecodec.EncodeValue(e.ctx.GetSessionVars().StmtCtx, nil, datum)
 			if err != nil {
 				return err
 			}
-			_, _ = hasher.Write(encoded)
+			key = append(key, encoded...)
 		}
-		hashSum := hasher.Sum64()
-		hashSum %= bfBitLen
-		e.bloomFilter[hashSum/bfUnitLen] |= 1 << (hashSum % bfUnitLen)
+		e.bloomFilter.Insert(key)
 	}
 	return nil
 }

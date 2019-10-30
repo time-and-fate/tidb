@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/tidb/statistics"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/types"
+	"github.com/pingcap/tidb/util/bloom"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pingcap/tidb/util/memory"
@@ -73,7 +74,7 @@ type TableReaderExecutor struct {
 	selectResultHook // for testing
 
 	// bloomFilter is built in hash join executor before `Open` is called here.
-	bloomFilter []uint64
+	bloomFilter *bloom.Filter
 	joinKeyIdx  []int64
 
 	keepOrder bool
@@ -107,7 +108,7 @@ func (e *TableReaderExecutor) Open(ctx context.Context) error {
 
 	if e.bloomFilter != nil {
 		bfExec := &tipb.BloomFilter{
-			BitSet: e.bloomFilter,
+			BitSet: e.bloomFilter.BitSet,
 			ColIdx: e.joinKeyIdx,
 		}
 		e.dagPB.Executors = append(e.dagPB.Executors, &tipb.Executor{Tp: tipb.ExecType_TypeBloomFilter, BloomFilter: bfExec})
