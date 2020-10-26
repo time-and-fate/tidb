@@ -75,7 +75,7 @@ var AnalyzeOptionDefault = map[ast.AnalyzeOptionType]uint64{
 	ast.AnalyzeOptNumTopN:       20,
 	ast.AnalyzeOptCMSketchWidth: 2048,
 	ast.AnalyzeOptCMSketchDepth: 5,
-	ast.AnalyzeOptNumSamples:    10000,
+	ast.AnalyzeOptNumSamples:    30000,
 }
 
 // Table represents statistics for a table.

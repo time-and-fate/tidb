@@ -1002,6 +1002,9 @@ func (idx *Index) equalRowCount(sc *stmtctx.StatementContext, b []byte, modifyCo
 		return float64(count), nil
 	}
 
+	if idx.Len() == 0 {
+		return 0, nil
+	}
 	return float64(idx.Histogram.Buckets[idx.Len()-1].Count) / float64(idx.NDV-int64(len(idx.TopN()))), nil
 }
 
