@@ -14,9 +14,11 @@
 package statistics
 
 import (
+	"bytes"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
+	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
 )
 
@@ -119,6 +121,103 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 	sampleNum := int64(len(samples))
 	// As we use samples to build the histogram, the bucket number and repeat should multiply a factor.
 	sampleFactor := float64(count) / float64(len(samples))
+
+	tmpTopN := make([]*dataCnt, 0, 100)
+	tmpTopNSize := 100
+
+	cur, err := tablecodec.EncodeValue(ctx.GetSessionVars().StmtCtx, nil, samples[0].Value)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	curCnt := float64(0)
+	var corrXYSum float64
+
+	// collect topn
+	for i := int64(0); i < sampleNum; i++ {
+		corrXYSum += float64(i) * float64(samples[i].Ordinal)
+
+		sampleBytes, err := tablecodec.EncodeValue(ctx.GetSessionVars().StmtCtx, nil, samples[i].Value)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		// case 1, equal to current: current count++
+		if bytes.Equal(cur, sampleBytes) {
+			curCnt += 1
+			continue
+		}
+		// case 2, meet a different value
+		// 2-1, topn is empty: append directly
+		if len(tmpTopN) == 0 {
+			tmpTopN = append(tmpTopN, &dataCnt{data: cur, cnt: uint64(curCnt)})
+			cur, curCnt = sampleBytes, 1
+			continue
+		}
+		// 2-2, topn is full, and current count is less than the least in the topn: no need to insert
+		if len(tmpTopN) >= tmpTopNSize && uint64(curCnt) <= tmpTopN[len(tmpTopN)-1].cnt {
+			cur, curCnt = sampleBytes, 1
+			continue
+		}
+		// 2-3, topn is not full, or current count is larger than the least in the topn: need to find a slot to insert the current
+		j := len(tmpTopN)
+		for ; j > 0; j-- {
+			if uint64(curCnt) < tmpTopN[j-1].cnt {
+				break
+			}
+		}
+		tmpTopN = append(tmpTopN, new(dataCnt))
+		copy(tmpTopN[j+1:], tmpTopN[j:])
+		tmpTopN[j] = &dataCnt{data: cur, cnt: uint64(curCnt)}
+		if len(tmpTopN) > tmpTopNSize {
+			tmpTopN = tmpTopN[:tmpTopNSize]
+		}
+
+		cur, curCnt = sampleBytes, 1
+	}
+
+	// 2-1, topn is empty: append directly
+	if len(tmpTopN) == 0 {
+		tmpTopN = append(tmpTopN, &dataCnt{data: cur, cnt: uint64(curCnt)})
+	} else if len(tmpTopN) < tmpTopNSize || uint64(curCnt) > tmpTopN[len(tmpTopN)-1].cnt {
+		// 2-3, topn is not full, or current count is larger than the least in the topn: need to find a slot to insert the current
+		j := len(tmpTopN)
+		for ; j > 0; j-- {
+			if uint64(curCnt) < tmpTopN[j-1].cnt {
+				break
+			}
+		}
+		tmpTopN = append(tmpTopN, new(dataCnt))
+		copy(tmpTopN[j+1:], tmpTopN[j:])
+		tmpTopN[j] = &dataCnt{data: cur, cnt: uint64(curCnt)}
+		if len(tmpTopN) > tmpTopNSize {
+			tmpTopN = tmpTopN[:tmpTopNSize]
+		}
+	}
+
+	// exclude topn data from samples
+	for i := int64(0); i < int64(len(samples)); i++ {
+		sampleBytes, err := tablecodec.EncodeValue(ctx.GetSessionVars().StmtCtx, nil, samples[i].Value)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		for j := 0; j < len(tmpTopN); j++ {
+			if bytes.Equal(sampleBytes, tmpTopN[j].data) {
+				copy(samples[i:], samples[uint64(i)+tmpTopN[j].cnt:])
+				samples = samples[:uint64(len(samples))-tmpTopN[j].cnt]
+				i--
+				continue
+			}
+		}
+	}
+
+	tmpTopNSum := uint64(0)
+	for i := 0; i < len(tmpTopN); i++ {
+		tmpTopN[i].cnt *= uint64(sampleFactor)
+		tmpTopNSum += tmpTopN[i].cnt
+	}
+
+	hg.TmpTopN = tmpTopN
+	hg.TmpTopNSum = tmpTopNSum
+
 	// Since bucket count is increased by sampleFactor, so the actual max values per bucket is
 	// floor(valuesPerBucket/sampleFactor)*sampleFactor, which may less than valuesPerBucket,
 	// thus we need to add a sampleFactor to avoid building too many buckets.
@@ -129,10 +228,12 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 	}
 	bucketIdx := 0
 	var lastCount int64
-	var corrXYSum float64
-	hg.AppendBucket(&samples[0].Value, &samples[0].Value, int64(sampleFactor), int64(ndvFactor))
-	for i := int64(1); i < sampleNum; i++ {
-		corrXYSum += float64(i) * float64(samples[i].Ordinal)
+
+	if len(samples) > 0 {
+		hg.AppendBucket(&samples[0].Value, &samples[0].Value, int64(sampleFactor), int64(ndvFactor))
+	}
+	for i := int64(1); i < int64(len(samples)); i++ {
+
 		cmp, err := hg.GetUpper(bucketIdx).CompareDatum(sc, &samples[i].Value)
 		if err != nil {
 			return nil, errors.Trace(err)

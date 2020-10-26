@@ -74,6 +74,18 @@ type Histogram struct {
 	// the column values. This ranges from -1 to +1, and it is only valid for Column histogram, not for
 	// Index histogram.
 	Correlation float64
+
+	TmpTopN    []*dataCnt
+	TmpTopNSum uint64
+}
+
+func TmpTopN2CMSTopN(tmpTopN []*dataCnt) map[uint64][]*TopNMeta {
+	res := make(map[uint64][]*TopNMeta)
+	for _, e := range tmpTopN {
+		h1, h2 := murmur3.Sum128(e.data)
+		res[h1] = append(res[h1], &TopNMeta{h2, e.data, e.cnt})
+	}
+	return res
 }
 
 // Bucket store the bucket count and repeat.
@@ -443,6 +455,24 @@ func (hg *Histogram) GetIncreaseFactor(totalCount int64) float64 {
 	return float64(totalCount) / columnCount
 }
 
+func (c *Column) GetIncreaseFactor(totalCount int64) float64 {
+	columnCount := c.TotalRowCount()
+	if columnCount == 0 {
+		// avoid dividing by 0
+		return 1.0
+	}
+	return float64(totalCount) / columnCount
+}
+
+func (idx *Index) GetIncreaseFactor(totalCount int64) float64 {
+	columnCount := idx.TotalRowCount()
+	if columnCount == 0 {
+		// avoid dividing by 0
+		return 1.0
+	}
+	return float64(totalCount) / columnCount
+}
+
 // validRange checks if the range is Valid, it is used by `SplitRange` to remove the invalid range,
 // the possible types of range are index key range and handle key range.
 func validRange(sc *stmtctx.StatementContext, ran *ranger.Range, encoded bool) bool {
@@ -779,29 +809,41 @@ func (c *Column) IsInvalid(sc *stmtctx.StatementContext, collPseudo bool) bool {
 	if collPseudo && c.NotAccurate() {
 		return true
 	}
-	if c.NDV > 0 && c.Len() == 0 && sc != nil {
+	if c.NDV > 0 && c.Len() == 0 && c.CMSketch == nil && sc != nil {
 		sc.SetHistogramsNotLoad()
 		HistogramNeededColumns.insert(tableColumnID{TableID: c.PhysicalID, ColumnID: c.Info.ID})
 	}
-	return c.TotalRowCount() == 0 || (c.NDV > 0 && c.Len() == 0)
+	return c.TotalRowCount() == 0 || (c.NDV > 0 && c.Len() == 0 && c.CMSketch == nil)
+}
+
+func (c *Column) TotalRowCount() float64 {
+	topNCnt := uint64(0)
+	if c.CMSketch != nil {
+		for _, metas := range c.topN {
+			for _, meta := range metas {
+				topNCnt += meta.Count
+			}
+		}
+	}
+	return c.Histogram.TotalRowCount() + float64(topNCnt)
 }
 
 func (c *Column) equalRowCount(sc *stmtctx.StatementContext, val types.Datum, modifyCount int64) (float64, error) {
 	if val.IsNull() {
 		return float64(c.NullCount), nil
 	}
-	// All the values are null.
-	if c.Histogram.Bounds.NumRows() == 0 {
-		return 0.0, nil
+
+	valBytes, err := tablecodec.EncodeValue(sc, nil, val)
+	if err != nil {
+		return 0, errors.Trace(err)
 	}
-	if c.NDV > 0 && c.outOfRange(val) {
-		return outOfRangeEQSelectivity(c.NDV, modifyCount, int64(c.TotalRowCount())) * c.TotalRowCount(), nil
+
+	h1, h2 := murmur3.Sum128(valBytes)
+	if count, ok := c.QueryTopN(h1, h2, valBytes); ok {
+		return float64(count), nil
 	}
-	if c.CMSketch != nil {
-		count, err := c.CMSketch.queryValue(sc, val)
-		return float64(count), errors.Trace(err)
-	}
-	return c.Histogram.equalRowCount(val), nil
+
+	return float64(c.Count-c.NullCount-c.TopNCount()) / float64(c.NDV-int64(len(c.TopN()))), nil
 }
 
 // GetColumnRowCount estimates the row count by a slice of Range.
@@ -919,11 +961,11 @@ func (idx *Index) IsInvalid(sc *stmtctx.StatementContext, collPseudo bool) bool 
 	if collPseudo && idx.NotAccurate() {
 		return true
 	}
-	if idx.NDV > 0 && idx.Len() == 0 && sc != nil {
+	if idx.NDV > 0 && idx.Len() == 0 && idx.CMSketch == nil && sc != nil {
 		sc.SetHistogramsNotLoad()
 		HistogramNeededIndices.insert(tableIndexID{TableID: idx.PhysicalID, IndexID: idx.Info.ID})
 	}
-	return idx.TotalRowCount() == 0 || (idx.NDV > 0 && idx.Len() == 0)
+	return idx.TotalRowCount() == 0 || (idx.NDV > 0 && idx.Len() == 0 && idx.CMSketch == nil)
 }
 
 // MemoryUsage returns the total memory usage of a Histogram and CMSketch in Index.
@@ -938,20 +980,29 @@ func (idx *Index) MemoryUsage() (sum int64) {
 
 var nullKeyBytes, _ = codec.EncodeKey(nil, nil, types.NewDatum(nil))
 
+func (idx *Index) TotalRowCount() float64 {
+	topNCnt := uint64(0)
+	for _, metas := range idx.topN {
+		for _, meta := range metas {
+			topNCnt += meta.Count
+		}
+	}
+	return idx.Histogram.TotalRowCount() + float64(topNCnt)
+}
+
 func (idx *Index) equalRowCount(sc *stmtctx.StatementContext, b []byte, modifyCount int64) (float64, error) {
 	if len(idx.Info.Columns) == 1 {
 		if bytes.Equal(b, nullKeyBytes) {
 			return float64(idx.NullCount), nil
 		}
 	}
-	val := types.NewBytesDatum(b)
-	if idx.NDV > 0 && idx.outOfRange(val) {
-		return outOfRangeEQSelectivity(idx.NDV, modifyCount, int64(idx.TotalRowCount())) * idx.TotalRowCount(), nil
+
+	h1, h2 := murmur3.Sum128(b)
+	if count, ok := idx.QueryTopN(h1, h2, b); ok {
+		return float64(count), nil
 	}
-	if idx.CMSketch != nil {
-		return float64(idx.CMSketch.QueryBytes(b)), nil
-	}
-	return idx.Histogram.equalRowCount(val), nil
+
+	return float64(idx.Histogram.Buckets[idx.Len()-1].Count) / float64(idx.NDV-int64(len(idx.TopN()))), nil
 }
 
 // GetRowCount returns the row count of the given ranges.

@@ -21,7 +21,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cznic/mathutil"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser/ast"
 	"github.com/pingcap/parser/model"
@@ -570,25 +569,12 @@ func (coll *HistColl) getEqualCondSelectivity(idx *Index, bytes []byte, usedCols
 	if idx.Info.Unique && coverAll {
 		return 1.0 / float64(idx.TotalRowCount())
 	}
-	val := types.NewBytesDatum(bytes)
-	if idx.outOfRange(val) {
-		// When the value is out of range, we could not found this value in the CM Sketch,
-		// so we use heuristic methods to estimate the selectivity.
-		if idx.NDV > 0 && coverAll {
-			return outOfRangeEQSelectivity(idx.NDV, coll.ModifyCount, int64(idx.TotalRowCount()))
-		}
-		// The equal condition only uses prefix columns of the index.
-		colIDs := coll.Idx2ColumnIDs[idx.ID]
-		var ndv int64
-		for i, colID := range colIDs {
-			if i >= usedColsLen {
-				break
-			}
-			ndv = mathutil.MaxInt64(ndv, coll.Columns[colID].NDV)
-		}
-		return outOfRangeEQSelectivity(ndv, coll.ModifyCount, int64(idx.TotalRowCount()))
+
+	cnt, err := idx.equalRowCount(nil, bytes, 0)
+	if err != nil {
+		return 0
 	}
-	return float64(idx.CMSketch.QueryBytes(bytes)) / float64(idx.TotalRowCount())
+	return cnt / idx.TotalRowCount()
 }
 
 func (coll *HistColl) getIndexRowCount(sc *stmtctx.StatementContext, idxID int64, indexRanges []*ranger.Range) (float64, error) {

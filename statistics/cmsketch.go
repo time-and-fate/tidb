@@ -45,6 +45,10 @@ type CMSketch struct {
 	topN         map[uint64][]*TopNMeta
 }
 
+func (cms *CMSketch) SetTopN(newTopN map[uint64][]*TopNMeta) {
+	cms.topN = newTopN
+}
+
 // TopNMeta is a simple counter used by BuildTopN.
 type TopNMeta struct {
 	h2    uint64 // h2 is the second part of `murmur3.Sum128()`, it is always used with the first part `h1`.
@@ -490,6 +494,16 @@ func (c *CMSketch) TotalCount() uint64 {
 	for _, metas := range c.topN {
 		for _, meta := range metas {
 			res += meta.Count
+		}
+	}
+	return res
+}
+
+func (c *CMSketch) TopNCount() int64 {
+	res := int64(0)
+	for _, metas := range c.topN {
+		for _, meta := range metas {
+			res += int64(meta.Count)
 		}
 	}
 	return res

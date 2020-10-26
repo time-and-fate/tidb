@@ -410,6 +410,9 @@ func analyzeColumnsPushdown(colExec *AnalyzeColumnsExec) analyzeResult {
 	if hist.Len() > 0 {
 		result.Count += hist.Buckets[hist.Len()-1].Count
 	}
+	if hist.TmpTopN != nil {
+		result.Count += int64(hist.TmpTopNSum)
+	}
 	return result
 }
 
@@ -555,6 +558,9 @@ func (e *AnalyzeColumnsExec) buildStats(ranges []*ranger.Range, needExtStats boo
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		if hg.TmpTopN != nil {
+			collectors[i].CMSketch.SetTopN(statistics.TmpTopN2CMSTopN(hg.TmpTopN))
+		}
 		hists = append(hists, hg)
 		collectors[i].CMSketch.CalcDefaultValForAnalyze(uint64(hg.NDV))
 		cms = append(cms, collectors[i].CMSketch)
@@ -606,6 +612,9 @@ func analyzeFastExec(exec *AnalyzeFastExec) []analyzeResult {
 			if hists[i].Len() > 0 {
 				idxResult.Count += hists[i].Buckets[hists[i].Len()-1].Count
 			}
+			if hists[i].TmpTopN != nil {
+				idxResult.Count += int64(hists[i].TmpTopNSum)
+			}
 			if exec.rowCount != 0 {
 				idxResult.Count = exec.rowCount
 			}
@@ -622,6 +631,9 @@ func analyzeFastExec(exec *AnalyzeFastExec) []analyzeResult {
 	}
 	if hist.Len() > 0 {
 		colResult.Count += hist.Buckets[hist.Len()-1].Count
+	}
+	if hist.TmpTopN != nil {
+		colResult.Count += int64(hist.TmpTopNSum)
 	}
 	if exec.rowCount != 0 {
 		colResult.Count = exec.rowCount
@@ -1012,6 +1024,10 @@ func (e *AnalyzeFastExec) buildColumnStats(ID int64, collector *statistics.Sampl
 	cmSketch, ndv, scaleRatio := statistics.NewCMSketchWithTopN(int32(e.opts[ast.AnalyzeOptCMSketchDepth]), int32(e.opts[ast.AnalyzeOptCMSketchWidth]), data, uint32(e.opts[ast.AnalyzeOptNumTopN]), uint64(rowCount))
 	// Build Histogram.
 	hist, err := statistics.BuildColumnHist(e.ctx, int64(e.opts[ast.AnalyzeOptNumBuckets]), ID, collector, tp, rowCount, int64(ndv), collector.NullCount*int64(scaleRatio))
+
+	if hist.TmpTopN != nil {
+		cmSketch.SetTopN(statistics.TmpTopN2CMSTopN(hist.TmpTopN))
+	}
 	return hist, cmSketch, err
 }
 
@@ -1046,6 +1062,9 @@ func (e *AnalyzeFastExec) buildIndexStats(idxInfo *model.IndexInfo, collector *s
 	}
 	// Build Histogram.
 	hist, err := statistics.BuildColumnHist(e.ctx, int64(e.opts[ast.AnalyzeOptNumBuckets]), idxInfo.ID, collector, types.NewFieldType(mysql.TypeBlob), rowCount, int64(ndv), collector.NullCount*int64(scaleRatio))
+	if hist.TmpTopN != nil {
+		cmSketch.SetTopN(statistics.TmpTopN2CMSTopN(hist.TmpTopN))
+	}
 	return hist, cmSketch, err
 }
 
