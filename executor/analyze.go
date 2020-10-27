@@ -1061,7 +1061,7 @@ func (e *AnalyzeFastExec) buildIndexStats(idxInfo *model.IndexInfo, collector *s
 		}
 	}
 	// Build Histogram.
-	hist, err := statistics.BuildColumnHist(e.ctx, int64(e.opts[ast.AnalyzeOptNumBuckets]), idxInfo.ID, collector, types.NewFieldType(mysql.TypeBlob), rowCount, int64(ndv), collector.NullCount*int64(scaleRatio))
+	hist, err := statistics.BuildColumnHistForIndex(e.ctx, int64(e.opts[ast.AnalyzeOptNumBuckets]), idxInfo.ID, collector, types.NewFieldType(mysql.TypeBlob), rowCount, int64(ndv), collector.NullCount*int64(scaleRatio))
 	if hist.TmpTopN != nil {
 		cmSketch.SetTopN(statistics.TmpTopN2CMSTopN(hist.TmpTopN))
 	}
