@@ -80,6 +80,7 @@ type Histogram struct {
 type Bucket struct {
 	Count  int64
 	Repeat int64
+	NDV    int64
 }
 
 type scalar struct {
@@ -206,6 +207,12 @@ func (c *Column) AvgColSizeListInDisk(count int64) float64 {
 // AppendBucket appends a bucket into `hg`.
 func (hg *Histogram) AppendBucket(lower *types.Datum, upper *types.Datum, count, repeat int64) {
 	hg.Buckets = append(hg.Buckets, Bucket{Count: count, Repeat: repeat})
+	hg.Bounds.AppendDatum(0, lower)
+	hg.Bounds.AppendDatum(0, upper)
+}
+
+func (hg *Histogram) AppendBucketWithNDV(lower *types.Datum, upper *types.Datum, count, repeat, ndv int64) {
+	hg.Buckets = append(hg.Buckets, Bucket{Count: count, Repeat: repeat, NDV: ndv})
 	hg.Bounds.AppendDatum(0, lower)
 	hg.Bounds.AppendDatum(0, upper)
 }
@@ -343,6 +350,45 @@ func (hg *Histogram) equalRowCount(value types.Datum) float64 {
 			return float64(hg.Buckets[index/2].Repeat)
 		}
 		return hg.notNullCount() / float64(hg.NDV)
+	}
+	return 0
+}
+
+func (hg *Histogram) equalRowCountWithNDV(value types.Datum) float64 {
+	index, match := hg.Bounds.LowerBound(0, &value)
+	// Since we store the lower and upper bound together, if the index is an odd number, then it points to a upper bound.
+	if index%2 == 1 {
+		if match {
+			return float64(hg.Buckets[index/2].Repeat)
+		}
+		bkt := hg.Buckets[index/2]
+		var lastBktCount int64
+		if index/2 != 0 {
+			lastBktCount = hg.Buckets[index/2-1].Count
+		}
+		// exclude the ending one
+		bktNDV := bkt.NDV - 1
+		if bktNDV <= 0 {
+			panic("this should not happen, this is just a test so we panic here")
+		}
+		return float64((bkt.Count - lastBktCount - bkt.Repeat) / bktNDV)
+	}
+	if match {
+		cmp := chunk.GetCompareFunc(hg.Tp)
+		if cmp(hg.Bounds.GetRow(index), 0, hg.Bounds.GetRow(index+1), 0) == 0 {
+			return float64(hg.Buckets[index/2].Repeat)
+		}
+		bkt := hg.Buckets[index/2]
+		var lastBktCount int64
+		if index/2 != 0 {
+			lastBktCount = hg.Buckets[index/2-1].Count
+		}
+		// exclude the ending one
+		bktNDV := bkt.NDV - 1
+		if bktNDV <= 0 {
+			panic("this should not happen, this is just a test so we panic here")
+		}
+		return float64((bkt.Count - lastBktCount - bkt.Repeat) / bktNDV)
 	}
 	return 0
 }
@@ -798,11 +844,7 @@ func (c *Column) equalRowCount(sc *stmtctx.StatementContext, val types.Datum, mo
 	if c.NDV > 0 && c.outOfRange(val) {
 		return outOfRangeEQSelectivity(c.NDV, modifyCount, int64(c.TotalRowCount())) * c.TotalRowCount(), nil
 	}
-	if c.CMSketch != nil {
-		count, err := queryValue(sc, c.CMSketch, c.TopN, val)
-		return float64(count), errors.Trace(err)
-	}
-	return c.Histogram.equalRowCount(val), nil
+	return c.Histogram.equalRowCountWithNDV(val), nil
 }
 
 // GetColumnRowCount estimates the row count by a slice of Range.

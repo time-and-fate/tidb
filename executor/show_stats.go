@@ -187,6 +187,7 @@ func (e *ShowExec) bucketsToRows(dbName, tblName, partitionName, colName string,
 			hist.Buckets[i].Repeat,
 			lowerBoundStr,
 			upperBoundStr,
+			hist.Buckets[i].NDV,
 		})
 	}
 	return nil

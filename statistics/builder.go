@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/types"
+	"math"
 )
 
 // SortedBuilder is used to build histograms for PK and index.
@@ -131,6 +132,11 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 	var lastCount int64
 	var corrXYSum float64
 	hg.AppendBucket(&samples[0].Value, &samples[0].Value, int64(sampleFactor), int64(ndvFactor))
+	var sampleBktNDV int64 = 1
+	// f1 is NDV of items that only appear once in the samples
+	var f1 int64
+	// moreThanOnce helps to calc f1
+	var moreThanOnce bool
 	for i := int64(1); i < sampleNum; i++ {
 		corrXYSum += float64(i) * float64(samples[i].Ordinal)
 		cmp, err := hg.GetUpper(bucketIdx).CompareDatum(sc, &samples[i].Value)
@@ -139,6 +145,7 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 		}
 		totalCount := float64(i+1) * sampleFactor
 		if cmp == 0 {
+			moreThanOnce = true
 			// The new item has the same value as current bucket value, to ensure that
 			// a same value only stored in a single bucket, we do not increase bucketIdx even if it exceeds
 			// valuesPerBucket.
@@ -149,15 +156,30 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 				hg.Buckets[bucketIdx].Repeat += int64(sampleFactor)
 			}
 		} else if totalCount-float64(lastCount) <= valuesPerBucket {
+			if moreThanOnce == false {
+				f1++
+			}
+			sampleBktNDV++
+			moreThanOnce = false
 			// The bucket still have room to store a new item, update the bucket.
 			hg.updateLastBucket(&samples[i].Value, int64(totalCount), int64(ndvFactor))
 		} else {
+			if moreThanOnce == false {
+				f1++
+			}
+			hg.Buckets[len(hg.Buckets)-1].NDV = int64(math.Sqrt(sampleFactor)*float64(f1)) + sampleBktNDV - f1
 			lastCount = hg.Buckets[bucketIdx].Count
 			// The bucket is full, store the item in the next bucket.
 			bucketIdx++
 			hg.AppendBucket(&samples[i].Value, &samples[i].Value, int64(totalCount), int64(ndvFactor))
+			sampleBktNDV = 1
+			f1 = 0
 		}
 	}
+	if moreThanOnce == false {
+		f1++
+	}
+	hg.Buckets[len(hg.Buckets)-1].NDV = int64(math.Sqrt(sampleFactor)*float64(f1)) + sampleBktNDV - f1
 	// Compute column order correlation with handle.
 	if sampleNum == 1 {
 		hg.Correlation = 1

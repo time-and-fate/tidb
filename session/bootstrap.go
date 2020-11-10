@@ -200,6 +200,7 @@ const (
 		repeats 	BIGINT(64) NOT NULL,
 		upper_bound BLOB NOT NULL,
 		lower_bound BLOB ,
+		ndv			BIGINT NOT NULL DEFAULT 0,
 		UNIQUE INDEX tbl(table_id, is_index, hist_id, bucket_id)
 	);`
 
@@ -427,6 +428,7 @@ const (
 	version51 = 51
 	// version52 change mysql.stats_histograms cm_sketch column from blob to blob(6291456)
 	version52 = 52
+	version53 = 53
 )
 
 var (
@@ -482,6 +484,7 @@ var (
 		upgradeToVer50,
 		upgradeToVer51,
 		upgradeToVer52,
+		upgradeToVer53,
 	}
 )
 
@@ -1188,6 +1191,13 @@ func upgradeToVer52(s Session, ver int64) {
 		return
 	}
 	doReentrantDDL(s, "ALTER TABLE mysql.stats_histograms MODIFY cm_sketch BLOB(6291456)")
+}
+
+func upgradeToVer53(s Session, ver int64) {
+	if ver >= version53 {
+		return
+	}
+	doReentrantDDL(s, "ALTER TABLE mysql.stats_buckets ADD COLUMN `ndv` bigint not null default 0", infoschema.ErrColumnExists)
 }
 
 // updateBootstrapVer updates bootstrap version variable in mysql.TiDB table.
