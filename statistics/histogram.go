@@ -816,6 +816,19 @@ func (c *Column) MemoryUsage() (sum int64) {
 	return
 }
 
+func (c *Column) TotalRowCount() float64 {
+	return c.Histogram.TotalRowCount() + float64(c.TopN.TotalCount())
+}
+
+func (c *Column) GetIncreaseFactor(totalCount int64) float64 {
+	columnCount := c.TotalRowCount()
+	if columnCount == 0 {
+		// avoid dividing by 0
+		return 1.0
+	}
+	return float64(totalCount) / columnCount
+}
+
 // HistogramNeededColumns stores the columns whose Histograms need to be loaded from physical kv layer.
 // Currently, we only load index/pk's Histogram from kv automatically. Columns' are loaded by needs.
 var HistogramNeededColumns = neededColumnMap{cols: map[tableColumnID]struct{}{}}
@@ -826,7 +839,7 @@ func (c *Column) IsInvalid(sc *stmtctx.StatementContext, collPseudo bool) bool {
 	if collPseudo && c.NotAccurate() {
 		return true
 	}
-	if c.NDV > 0 && c.Len() == 0 && sc != nil {
+	if c.NDV > 0 && c.Len() == 0 && c.TopN == nil && sc != nil {
 		sc.SetHistogramsNotLoad()
 		HistogramNeededColumns.insert(tableColumnID{TableID: c.PhysicalID, ColumnID: c.Info.ID})
 	}
@@ -837,9 +850,14 @@ func (c *Column) equalRowCount(sc *stmtctx.StatementContext, val types.Datum, mo
 	if val.IsNull() {
 		return float64(c.NullCount), nil
 	}
-	// All the values are null.
-	if c.Histogram.Bounds.NumRows() == 0 {
-		return 0.0, nil
+	if c.TopN != nil {
+		valBytes, err := tablecodec.EncodeValue(sc, nil, val)
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		if ret, ok := c.TopN.QueryTopN(valBytes); ok {
+			return float64(ret), nil
+		}
 	}
 	if c.NDV > 0 && c.outOfRange(val) {
 		return outOfRangeEQSelectivity(c.NDV, modifyCount, int64(c.TotalRowCount())) * c.TotalRowCount(), nil

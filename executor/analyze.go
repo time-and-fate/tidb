@@ -412,9 +412,15 @@ func analyzeColumnsPushdown(colExec *AnalyzeColumnsExec) analyzeResult {
 		job:      colExec.job,
 	}
 	hist := hists[0]
+	topN := topNs[0]
 	result.Count = hist.NullCount
 	if hist.Len() > 0 {
 		result.Count += hist.Buckets[hist.Len()-1].Count
+	}
+	if topN != nil {
+		for _, meta := range topN.TopN {
+			result.Count += int64(meta.Count)
+		}
 	}
 	return result
 }

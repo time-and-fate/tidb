@@ -14,9 +14,11 @@
 package statistics
 
 import (
+	"bytes"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
+	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
 	"math"
 )
@@ -117,13 +119,19 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 	}
 	hg := NewHistogram(id, ndv, nullCount, 0, tp, int(numBuckets), collector.TotalSize)
 
+	topN := collector.TopN.TopN
+	var topNTotal uint64
+	for _, meta := range topN {
+		topNTotal += meta.Count
+	}
+
 	sampleNum := int64(len(samples))
 	// As we use samples to build the histogram, the bucket number and repeat should multiply a factor.
 	sampleFactor := float64(count) / float64(len(samples))
 	// Since bucket count is increased by sampleFactor, so the actual max values per bucket is
 	// floor(valuesPerBucket/sampleFactor)*sampleFactor, which may less than valuesPerBucket,
 	// thus we need to add a sampleFactor to avoid building too many buckets.
-	valuesPerBucket := float64(count)/float64(numBuckets) + sampleFactor
+	valuesPerBucket := float64(count-int64(topNTotal))/float64(numBuckets) + sampleFactor
 	ndvFactor := float64(count) / float64(hg.NDV)
 	if ndvFactor > sampleFactor {
 		ndvFactor = sampleFactor
@@ -131,26 +139,66 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 	bucketIdx := 0
 	var lastCount int64
 	var corrXYSum float64
-	hg.AppendBucket(&samples[0].Value, &samples[0].Value, int64(sampleFactor), int64(ndvFactor))
+
+	var i int64 = 0
+	var iBktSample = i
+	for {
+		matched := false
+		valBytes, err := tablecodec.EncodeValue(ctx.GetSessionVars().StmtCtx, nil, samples[i].Value)
+		if err != nil {
+			return nil, err
+		}
+		for _, meta := range topN {
+			if bytes.Compare(valBytes, meta.Encoded) == 0 {
+				i++
+				matched = true
+				break
+			}
+		}
+		if matched == false {
+			break
+		}
+	}
+
+	hg.AppendBucket(&samples[i].Value, &samples[i].Value, int64(sampleFactor), int64(ndvFactor))
+	i++
+	iBktSample++
+
 	var sampleBktNDV int64 = 1
 	// f1 is NDV of items that only appear once in the samples
 	var f1 int64
 	// moreThanOnce helps to calc f1
 	var moreThanOnce bool
-	for i := int64(1); i < sampleNum; i++ {
+	for ; i < sampleNum; i++ {
 		corrXYSum += float64(i) * float64(samples[i].Ordinal)
+
+		matched := false
+		valBytes, err := tablecodec.EncodeValue(ctx.GetSessionVars().StmtCtx, nil, samples[i].Value)
+		if err != nil {
+			return nil, err
+		}
+		for _, meta := range topN {
+			if bytes.Compare(valBytes, meta.Encoded) == 0 {
+				matched = true
+				break
+			}
+		}
+		if matched == true {
+			continue
+		}
+
 		cmp, err := hg.GetUpper(bucketIdx).CompareDatum(sc, &samples[i].Value)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		totalCount := float64(i+1) * sampleFactor
+		totalCount := float64(iBktSample+1) * sampleFactor
 		if cmp == 0 {
 			moreThanOnce = true
 			// The new item has the same value as current bucket value, to ensure that
 			// a same value only stored in a single bucket, we do not increase bucketIdx even if it exceeds
 			// valuesPerBucket.
 			hg.Buckets[bucketIdx].Count = int64(totalCount)
-			if float64(hg.Buckets[bucketIdx].Repeat) == ndvFactor {
+			if hg.Buckets[bucketIdx].Repeat == int64(ndvFactor) {
 				hg.Buckets[bucketIdx].Repeat = int64(2 * sampleFactor)
 			} else {
 				hg.Buckets[bucketIdx].Repeat += int64(sampleFactor)
@@ -175,6 +223,7 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 			sampleBktNDV = 1
 			f1 = 0
 		}
+		iBktSample++
 	}
 	if moreThanOnce == false {
 		f1++
