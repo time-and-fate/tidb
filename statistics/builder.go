@@ -125,9 +125,25 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 		topNTotal += meta.Count
 	}
 
+	topNTotalInSample := uint64(0)
+	for i := 0; i < len(samples); i++ {
+		valBytes, err := tablecodec.EncodeValue(ctx.GetSessionVars().StmtCtx, nil, samples[i].Value)
+		if err != nil {
+			return nil, err
+		}
+		for _, meta := range topN {
+			if bytes.Compare(valBytes, meta.Encoded) == 0 {
+				topNTotalInSample++
+			}
+		}
+	}
 	sampleNum := int64(len(samples))
+	if uint64(len(samples)) <= topNTotalInSample {
+		// all samples are in topn
+		return hg, nil
+	}
 	// As we use samples to build the histogram, the bucket number and repeat should multiply a factor.
-	sampleFactor := float64(count) / float64(len(samples))
+	sampleFactor := float64(uint64(count)-topNTotal) / float64(uint64(len(samples))-topNTotalInSample)
 	// Since bucket count is increased by sampleFactor, so the actual max values per bucket is
 	// floor(valuesPerBucket/sampleFactor)*sampleFactor, which may less than valuesPerBucket,
 	// thus we need to add a sampleFactor to avoid building too many buckets.
