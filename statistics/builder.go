@@ -148,7 +148,10 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 	// floor(valuesPerBucket/sampleFactor)*sampleFactor, which may less than valuesPerBucket,
 	// thus we need to add a sampleFactor to avoid building too many buckets.
 	valuesPerBucket := float64(count-int64(topNTotal))/float64(numBuckets) + sampleFactor
-	ndvFactor := float64(count) / float64(hg.NDV)
+	if hg.NDV <= int64(len(topN)) {
+		return hg, nil
+	}
+	ndvFactor := float64(uint64(count)-topNTotal) / float64(hg.NDV-int64(len(topN)))
 	if ndvFactor > sampleFactor {
 		ndvFactor = sampleFactor
 	}
