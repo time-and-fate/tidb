@@ -843,7 +843,7 @@ func (c *Column) IsInvalid(sc *stmtctx.StatementContext, collPseudo bool) bool {
 		sc.SetHistogramsNotLoad()
 		HistogramNeededColumns.insert(tableColumnID{TableID: c.PhysicalID, ColumnID: c.Info.ID})
 	}
-	return c.TotalRowCount() == 0 || (c.NDV > 0 && c.Len() == 0)
+	return c.TotalRowCount() == 0 || (c.NDV > 0 && c.Len() == 0 && c.TopN == nil)
 }
 
 func (c *Column) equalRowCount(sc *stmtctx.StatementContext, val types.Datum, modifyCount int64) (float64, error) {
@@ -860,9 +860,40 @@ func (c *Column) equalRowCount(sc *stmtctx.StatementContext, val types.Datum, mo
 		}
 	}
 	if c.NDV > 0 && c.outOfRange(val) {
+		if modifyCount == 0 {
+			return c.tmpOutOfRangeRowCount(), nil
+		}
 		return outOfRangeEQSelectivity(c.NDV, modifyCount, int64(c.TotalRowCount())) * c.TotalRowCount(), nil
 	}
-	return c.Histogram.equalRowCountWithNDV(val), nil
+	result := c.Histogram.equalRowCountWithNDV(val)
+	if result == 0 {
+		result = c.tmpOutOfRangeRowCount()
+	}
+	return result, nil
+}
+
+func (c *Column) tmpOutOfRangeRowCount() float64 {
+	count := uint64(c.Count)
+	ndv := uint64(c.NDV)
+
+	// exclude topn
+	for _, meta := range c.TopN.TopN {
+		if count <= meta.Count {
+			return 0
+		}
+		count -= meta.Count
+	}
+	ndv -= uint64(len(c.TopN.TopN))
+	// exclude bucket.repeat
+	for _, bucket := range c.Buckets {
+		if count <= uint64(bucket.Repeat) {
+			return 0
+		}
+		count -= uint64(bucket.Repeat)
+	}
+	ndv -= uint64(len(c.Buckets))
+
+	return float64(count) / float64(ndv)
 }
 
 // GetColumnRowCount estimates the row count by a slice of Range.

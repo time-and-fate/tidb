@@ -346,6 +346,7 @@ func (h *Handle) LoadNeededHistograms() (err error) {
 			Count:      int64(hg.TotalRowCount()),
 			IsHandle:   c.IsHandle,
 		}
+		tbl.Columns[c.ID].Count = int64(tbl.Columns[c.ID].TotalRowCount())
 		h.statsCache.Update([]*statistics.Table{tbl}, nil, h.statsCache.GetVersion())
 		statistics.HistogramNeededColumns.Delete(col)
 	}
@@ -532,6 +533,7 @@ func (h *Handle) columnStatsFromStorage(reader *statsReader, row chunk.Row, tabl
 				IsHandle:   tableInfo.PKIsHandle && mysql.HasPriKeyFlag(colInfo.Flag),
 				Flag:       flag,
 			}
+			col.Count = int64(col.TotalRowCount())
 			lastAnalyzePos.Copy(&col.LastAnalyzePos)
 			break
 		}
