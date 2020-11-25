@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
-	"math"
 )
 
 // SortedBuilder is used to build histograms for PK and index.
@@ -126,6 +125,11 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 	}
 
 	topNTotalInSample := uint64(0)
+	var sampleMoreThanOnce bool
+	var sampleF1 int64
+	var sampleNDV int64
+	var lastValBytes []byte
+OUTER:
 	for i := 0; i < len(samples); i++ {
 		valBytes, err := tablecodec.EncodeValue(ctx.GetSessionVars().StmtCtx, nil, samples[i].Value)
 		if err != nil {
@@ -134,9 +138,22 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 		for _, meta := range topN {
 			if bytes.Compare(valBytes, meta.Encoded) == 0 {
 				topNTotalInSample++
+				continue OUTER
 			}
 		}
+
+		if bytes.Compare(lastValBytes, valBytes) == 0 {
+			sampleMoreThanOnce = true
+		} else {
+			sampleNDV++
+			if sampleMoreThanOnce == false {
+				sampleF1++
+			}
+			sampleMoreThanOnce = false
+			lastValBytes = valBytes
+		}
 	}
+	F1Factor := float64(ndv-int64(len(topN))-(sampleNDV-sampleF1)) / float64(sampleF1)
 	sampleNum := int64(len(samples))
 	if uint64(len(samples)) <= topNTotalInSample {
 		// all samples are in topn
@@ -234,7 +251,7 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 			if moreThanOnce == false {
 				f1++
 			}
-			hg.Buckets[len(hg.Buckets)-1].NDV = int64(math.Sqrt(sampleFactor)*float64(f1)) + sampleBktNDV - f1
+			hg.Buckets[len(hg.Buckets)-1].NDV = int64(F1Factor*float64(f1)) + sampleBktNDV - f1
 			lastCount = hg.Buckets[bucketIdx].Count
 			// The bucket is full, store the item in the next bucket.
 			bucketIdx++
@@ -247,7 +264,7 @@ func BuildColumnHist(ctx sessionctx.Context, numBuckets, id int64, collector *Sa
 	if moreThanOnce == false {
 		f1++
 	}
-	hg.Buckets[len(hg.Buckets)-1].NDV = int64(math.Sqrt(sampleFactor)*float64(f1)) + sampleBktNDV - f1
+	hg.Buckets[len(hg.Buckets)-1].NDV = int64(F1Factor*float64(f1)) + sampleBktNDV - f1
 	// Compute column order correlation with handle.
 	if sampleNum == 1 {
 		hg.Correlation = 1
