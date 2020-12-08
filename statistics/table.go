@@ -67,7 +67,7 @@ var AnalyzeOptionLimit = map[ast.AnalyzeOptionType]uint64{
 	ast.AnalyzeOptNumTopN:       1024,
 	ast.AnalyzeOptCMSketchWidth: CMSketchSizeLimit,
 	ast.AnalyzeOptCMSketchDepth: CMSketchSizeLimit,
-	ast.AnalyzeOptNumSamples:    100000,
+	ast.AnalyzeOptNumSamples:    1000000,
 }
 
 // AnalyzeOptionDefault indicates the default values of some attributes.
@@ -76,7 +76,7 @@ var AnalyzeOptionDefault = map[ast.AnalyzeOptionType]uint64{
 	ast.AnalyzeOptNumTopN:       20,
 	ast.AnalyzeOptCMSketchWidth: 2048,
 	ast.AnalyzeOptCMSketchDepth: 5,
-	ast.AnalyzeOptNumSamples:    10000,
+	ast.AnalyzeOptNumSamples:    500000,
 }
 
 // Table represents statistics for a table.

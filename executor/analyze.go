@@ -71,7 +71,7 @@ var (
 )
 
 const (
-	maxRegionSampleSize = 1000
+	maxRegionSampleSize = 100000
 	maxSketchSize       = 10000
 )
 
