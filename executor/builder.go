@@ -17,6 +17,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -2230,21 +2231,24 @@ func (b *executorBuilder) buildAnalyzeSamplingPushdown(task plannercore.AnalyzeC
 	if opts[ast.AnalyzeOptNumSamples] == 0 {
 		*sampleRate = math.Float64frombits(opts[ast.AnalyzeOptSampleRate])
 		if *sampleRate < 0 {
-			*sampleRate = b.getAdjustedSampleRate(b.ctx, task.TableID.GetStatisticsID(), task.TblInfo)
+			var reason string
+			*sampleRate, reason = b.getAdjustedSampleRate(b.ctx, task.TableID.GetStatisticsID(), task.TblInfo)
 			if task.PartitionName != "" {
 				sc.AppendNote(errors.Errorf(
-					"Analyze use auto adjusted sample rate %f for table %s.%s's partition %s.",
+					"Analyze use auto adjusted sample rate %f for table %s.%s's partition %s. Reason: %s",
 					*sampleRate,
 					task.DBName,
 					task.TableName,
 					task.PartitionName,
+					reason,
 				))
 			} else {
 				sc.AppendNote(errors.Errorf(
-					"Analyze use auto adjusted sample rate %f for table %s.%s.",
+					"Analyze use auto adjusted sample rate %f for table %s.%s. Reason: %s",
 					*sampleRate,
 					task.DBName,
 					task.TableName,
+					reason,
 				))
 			}
 		}
@@ -2268,11 +2272,11 @@ func (b *executorBuilder) buildAnalyzeSamplingPushdown(task plannercore.AnalyzeC
 }
 
 // getAdjustedSampleRate calculate the sample rate by the table size. If we cannot get the table size. We use the 0.001 as the default sample rate.
-func (b *executorBuilder) getAdjustedSampleRate(sctx sessionctx.Context, tid int64, tblInfo *model.TableInfo) float64 {
+func (b *executorBuilder) getAdjustedSampleRate(sctx sessionctx.Context, tid int64, tblInfo *model.TableInfo) (float64, string) {
 	statsHandle := domain.GetDomain(sctx).StatsHandle()
 	defaultRate := 0.001
 	if statsHandle == nil {
-		return defaultRate
+		return defaultRate, "nil stats handle"
 	}
 	var statsTbl *statistics.Table
 	if tid == tblInfo.ID {
@@ -2281,13 +2285,14 @@ func (b *executorBuilder) getAdjustedSampleRate(sctx sessionctx.Context, tid int
 		statsTbl = statsHandle.GetPartitionStats(tblInfo, tid)
 	}
 	approxiCount, hasPD := b.getApproximateTableCountFromPD(sctx, tid)
+	reason := fmt.Sprintf("statsTbl.Count=%v, hadPD=%v, approxiCount=%v", statsTbl.Count, hasPD, approxiCount)
 	// If there's no stats meta and no pd, return the default rate.
 	if statsTbl == nil && !hasPD {
-		return defaultRate
+		return defaultRate, "A " + reason
 	}
 	// If the count in stats_meta is still 0 and there's no information from pd side, we scan all rows.
 	if statsTbl.Count == 0 && !hasPD {
-		return 1
+		return 1, "B " + reason
 	}
 	// we have issue https://github.com/pingcap/tidb/issues/29216.
 	// To do a workaround for this issue, we check the approxiCount from the pd side to do a comparison.
@@ -2296,15 +2301,15 @@ func (b *executorBuilder) getAdjustedSampleRate(sctx sessionctx.Context, tid int
 	if float64(statsTbl.Count*100) < approxiCount {
 		// Confirmed by TiKV side, the experience error rate of the approximate count is about 20%.
 		// So we increase the number to 150000 to reduce this error rate.
-		return math.Min(1, 150000/approxiCount)
+		return math.Min(1, 150000/approxiCount), "C " + reason
 	}
 	// If we don't go into the above if branch and we still detect the count is zero. Return 1 to prevent the dividing zero.
 	if statsTbl.Count == 0 {
-		return 1
+		return 1, "D " + reason
 	}
 	// We are expected to scan about 100000 rows or so.
 	// Since there's tiny error rate around the count from the stats meta, we use 110000 to get a little big result
-	return math.Min(1, 110000/float64(statsTbl.Count))
+	return math.Min(1, 110000/float64(statsTbl.Count)), "E " + reason
 }
 
 func (b *executorBuilder) getApproximateTableCountFromPD(sctx sessionctx.Context, tid int64) (float64, bool) {

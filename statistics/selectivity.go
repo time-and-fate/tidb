@@ -287,6 +287,7 @@ func (coll *HistColl) Selectivity(ctx sessionctx.Context, exprs []expression.Exp
 	usedSets := GetUsableSetsByGreedy(nodes)
 	// Initialize the mask with the full set.
 	mask := (int64(1) << uint(len(remainedExprs))) - 1
+	var curExpr []expression.Expression
 	for _, set := range usedSets {
 		mask &^= set.mask
 		ret *= set.Selectivity
@@ -296,6 +297,22 @@ func (coll *HistColl) Selectivity(ctx sessionctx.Context, exprs []expression.Exp
 		// conditions.
 		if set.partCover {
 			ret *= selectionFactor
+		}
+
+		if ctx.GetSessionVars().EnableCETrace {
+			for i := range remainedExprs {
+				if set.mask&(1<<uint64(i)) > 0 {
+					curExpr = append(curExpr, remainedExprs[i])
+				}
+			}
+			expr := expression.ComposeCNFCondition(ctx, curExpr...)
+			CERecord := trace.CETraceRecord{
+				TableID:  coll.PhysicalID,
+				Type:     "Table Stats-Expression",
+				Expr:     ExprToString(expr),
+				RowCount: uint64(ret * float64(coll.Count)),
+			}
+			ctx.GetSessionVars().StmtCtx.CETraceRecords = append(ctx.GetSessionVars().StmtCtx.CETraceRecords, &CERecord)
 		}
 	}
 
@@ -353,15 +370,51 @@ func (coll *HistColl) Selectivity(ctx sessionctx.Context, exprs []expression.Exp
 				selectivity = selectivity + curSelectivity - selectivity*curSelectivity
 			}
 
+			if ctx.GetSessionVars().EnableCETrace {
+				CERecord := trace.CETraceRecord{
+					TableID:  coll.PhysicalID,
+					Type:     "Table Stats-Expression",
+					Expr:     ExprToString(scalarCond),
+					RowCount: uint64(selectivity * float64(coll.Count)),
+				}
+				ctx.GetSessionVars().StmtCtx.CETraceRecords = append(ctx.GetSessionVars().StmtCtx.CETraceRecords, &CERecord)
+			}
 			if selectivity != 0 {
 				ret *= selectivity
 				mask &^= 1 << uint64(i)
+			}
+			if ctx.GetSessionVars().EnableCETrace {
+				curExpr = append(curExpr, remainedExprs[i])
+				expr := expression.ComposeCNFCondition(ctx, curExpr...)
+				CERecord := trace.CETraceRecord{
+					TableID:  coll.PhysicalID,
+					Type:     "Table Stats-Expression",
+					Expr:     ExprToString(expr),
+					RowCount: uint64(ret * float64(coll.Count)),
+				}
+				ctx.GetSessionVars().StmtCtx.CETraceRecords = append(ctx.GetSessionVars().StmtCtx.CETraceRecords, &CERecord)
 			}
 		}
 	}
 
 	// If there's still conditions which cannot be calculated, we will multiply a selectionFactor.
 	if mask > 0 {
+		if ctx.GetSessionVars().EnableCETrace {
+			var remained []expression.Expression
+			for i := range remainedExprs {
+				if mask&(1<<uint64(i)) > 0 {
+					remained = append(remained, remainedExprs[i])
+				}
+			}
+			expr := expression.ComposeCNFCondition(ctx, remained...)
+			CERecord := trace.CETraceRecord{
+				TableID:  coll.PhysicalID,
+				Type:     "Table Stats-Expression",
+				Expr:     ExprToString(expr),
+				RowCount: uint64(ret * float64(coll.Count)),
+			}
+			ctx.GetSessionVars().StmtCtx.CETraceRecords = append(ctx.GetSessionVars().StmtCtx.CETraceRecords, &CERecord)
+		}
 		ret *= selectionFactor
 	}
 	if ctx.GetSessionVars().EnableCETrace {
