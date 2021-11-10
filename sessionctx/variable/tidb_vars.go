@@ -772,7 +772,8 @@ const (
 	DefTiDBEnableOrderedResultMode        = false
 	DefTiDBEnablePseudoForOutdatedStats   = true
 	DefEnablePlacementCheck               = true
-	DefTiDBEnableCETrace                         = false
+	DefTimestamp                          = "0"
+	DefTiDBEnableCETrace                  = false
 )
 
 // Process global variables.
