@@ -1842,8 +1842,8 @@ func ResetContextOfStmt(ctx sessionctx.Context, s ast.StmtNode) (err error) {
 	}
 
 	sc.TblInfo2UnionScan = make(map[*model.TableInfo]bool)
-	sc.EnableCETrace = vars.EnableCETrace
-	sc.CETraceRecords = nil
+	sc.EnableOptimizerCETrace = vars.EnableCETrace
+	sc.OptimizerCETrace = nil
 	errCount, warnCount := vars.StmtCtx.NumErrorWarnings()
 	vars.SysErrorCount = errCount
 	vars.SysWarningCount = warnCount

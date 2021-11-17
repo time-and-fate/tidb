@@ -3,27 +3,27 @@ package handle
 import (
 	"context"
 	"github.com/pingcap/tidb/infoschema"
-	"github.com/pingcap/tidb/planner/trace"
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pingcap/tidb/util/sqlexec"
+	"github.com/pingcap/tidb/util/tracing"
 	"go.uber.org/zap"
 )
 
 type Handle struct {
-	RecordCh chan []*trace.CETraceRecord
+	RecordCh chan []*tracing.CETraceRecord
 	Session  sessionctx.Context
 }
 
 func NewHandle(sctx sessionctx.Context) *Handle {
 	h := &Handle{
-		RecordCh: make(chan []*trace.CETraceRecord, 100),
+		RecordCh: make(chan []*tracing.CETraceRecord, 100),
 		Session:  sctx,
 	}
 	return h
 }
 
-func (h *Handle) Run(rec *trace.CETraceRecord) {
+func (h *Handle) Run(rec *tracing.CETraceRecord) {
 	is := h.Session.GetInfoSchema().(infoschema.InfoSchema)
 	tbl, ok := is.TableByID(rec.TableID)
 	if !ok {

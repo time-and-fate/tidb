@@ -601,11 +601,10 @@ func DetachCondAndBuildRangeForPartition(sctx sessionctx.Context, conditions []e
 	return d.detachCondAndBuildRangeForCols()
 }
 
-func RangesToString(sc *stmtctx.StatementContext, rans []*Range, colNames []string) string {
+func RangesToString(sc *stmtctx.StatementContext, rans []*Range, colNames []string) (string, error) {
 	for _, ran := range rans {
 		if len(ran.LowVal) != len(ran.HighVal) {
-			logutil.BgLogger().Warn("[CE Trace] RangeToString", zap.String("err", "length mismatch"))
-			return ""
+			return "", errors.New("range length mismatch")
 		}
 	}
 	var buffer bytes.Buffer
@@ -626,16 +625,15 @@ func RangesToString(sc *stmtctx.StatementContext, rans []*Range, colNames []stri
 			if j < len(ran.LowVal)-1 {
 				cmp, err := ran.LowVal[j].CompareDatum(sc, &ran.HighVal[j])
 				if err != nil {
-					logutil.BgLogger().Warn("[CE Trace] Error when comparing values", zap.Error(err))
-					return ""
+					return "", errors.New("comparing values error: "+err.Error())
 				}
 				if cmp != 0 {
-					logutil.BgLogger().Warn("[CE Trace] unexpected range", zap.String("range", ran.String()))
-					return ""
+					return "", errors.New("unexpected form of range")
 				}
 			}
 
-			buffer.WriteString(RangeSingleColToString(sc, ran.LowVal[j], ran.HighVal[j], lowExclude, highExclude, colNames[j]))
+			str:= RangeSingleColToString(sc, ran.LowVal[j], ran.HighVal[j], lowExclude, highExclude, colNames[j])
+			buffer.WriteString(str)
 			buffer.WriteString(")")
 			if j < len(ran.LowVal)-1 {
 				buffer.WriteString(" and ")
@@ -648,9 +646,9 @@ func RangesToString(sc *stmtctx.StatementContext, rans []*Range, colNames []stri
 	}
 	result := buffer.String()
 	if matched, err := regexp.MatchString(`^\(*true\)*$`, result); matched || (err != nil) {
-		return ""
+		return "true", nil
 	}
-	return result
+	return result, nil
 }
 
 func RangeSingleColToString(sc *stmtctx.StatementContext, lowVal, highVal types.Datum, lowExclude, highExclude bool, colName string) string {

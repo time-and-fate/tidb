@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/util/logutil"
+	"go.uber.org/zap"
 	"math"
 
 	"github.com/pingcap/errors"
@@ -280,10 +281,21 @@ func DoOptimize(ctx context.Context, sctx sessionctx.Context, flag uint64, logic
 	// Save CE trace records.
 	if vars.EnableCETrace {
 		traceHandle := domain.GetDomain(sctx).OptTraceHandle
-		traceRecords := vars.StmtCtx.CETraceRecords
+		traceRecords := vars.StmtCtx.OptimizerCETrace
+		is := sctx.GetInfoSchema().(infoschema.InfoSchema)
+		for _, rec := range traceRecords {
+			tbl, ok := is.TableByID(rec.TableID)
+			if !ok {
+				logutil.BgLogger().Warn("[CE Trace] Failed to find table in infoschema",
+					zap.Int64("table id", rec.TableID))
+			}
+			tblInfo := tbl.Meta()
+			tableName := tblInfo.Name.O
+			rec.TableName = tableName
+		}
 		select {
 		case traceHandle.RecordCh <- traceRecords:
-			vars.StmtCtx.CETraceRecords = nil
+			vars.StmtCtx.OptimizerCETrace = nil
 		default:
 			logutil.BgLogger().Warn("[CE Trace] dropped records for one optimization")
 		}
