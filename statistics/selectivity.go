@@ -295,15 +295,24 @@ func (coll *HistColl) Selectivity(ctx sessionctx.Context, exprs []expression.Exp
 	// curExpr records covered expressions by now. It's for cardinality estimation tracing.
 	var curExpr []expression.Expression
 
-	for _, set := range usedSets {
+	sort.Slice(usedSets, func(i, j int) bool {
+		return usedSets[i].Selectivity < usedSets[j].Selectivity
+	})
+	for i, set := range usedSets {
 		mask &^= set.mask
-		ret *= set.Selectivity
-		// If `partCover` is true, it means that the conditions are in DNF form, and only part
-		// of the DNF expressions are extracted as access conditions, so besides from the selectivity
-		// of the extracted access conditions, we multiply another selectionFactor for the residual
-		// conditions.
-		if set.partCover {
-			ret *= selectionFactor
+		if i <= 3 {
+			sel := set.Selectivity
+			for j := 0; j < i; j++ {
+				sel = math.Sqrt(sel)
+			}
+			ret *= sel
+			// If `partCover` is true, it means that the conditions are in DNF form, and only part
+			// of the DNF expressions are extracted as access conditions, so besides from the selectivity
+			// of the extracted access conditions, we multiply another selectionFactor for the residual
+			// conditions.
+			if set.partCover {
+				ret *= selectionFactor
+			}
 		}
 		if sc.EnableOptimizerCETrace {
 			// Tracing for the expression estimation results after applying this StatsNode.
