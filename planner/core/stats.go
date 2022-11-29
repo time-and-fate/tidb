@@ -420,30 +420,30 @@ func (ds *DataSource) DeriveStats(_ []*property.StatsInfo, _ *expression.Schema,
 
 	stmtCtx := ds.ctx.GetSessionVars().StmtCtx
 	isPossibleIdxMerge := len(indexMergeConds) > 0 && len(ds.possibleAccessPaths) > 1
-	sessionAndStmtPermission := (ds.ctx.GetSessionVars().GetEnableIndexMerge() || len(ds.indexMergeHints) > 0) && !stmtCtx.NoIndexMergeHint
+	sessionAndStmtPermission := !stmtCtx.NoIndexMergeHint
 	// We current do not consider `IndexMergePath`:
 	// 1. If there is an index path.
 	// 2. TODO: If there exists exprs that cannot be pushed down. This is to avoid wrongly estRow of Selection added by rule_predicate_push_down.
-	needConsiderIndexMerge := true
-	if len(ds.indexMergeHints) == 0 {
-		for i := 1; i < len(ds.possibleAccessPaths); i++ {
-			if len(ds.possibleAccessPaths[i].AccessConds) != 0 {
-				needConsiderIndexMerge = false
-				break
-			}
-		}
-		if needConsiderIndexMerge {
-			// PushDownExprs() will append extra warnings, which is annoying. So we reset warnings here.
-			warnings := stmtCtx.GetWarnings()
-			_, remaining := expression.PushDownExprs(stmtCtx, indexMergeConds, ds.ctx.GetClient(), kv.UnSpecified)
-			stmtCtx.SetWarnings(warnings)
-			if len(remaining) != 0 {
-				needConsiderIndexMerge = false
-			}
-		}
-	}
+	//needConsiderIndexMerge := true
+	//if len(ds.indexMergeHints) == 0 {
+	//	for i := 1; i < len(ds.possibleAccessPaths); i++ {
+	//		if len(ds.possibleAccessPaths[i].AccessConds) != 0 {
+	//			needConsiderIndexMerge = false
+	//			break
+	//		}
+	//	}
+	//	if needConsiderIndexMerge {
+	//		// PushDownExprs() will append extra warnings, which is annoying. So we reset warnings here.
+	//		warnings := stmtCtx.GetWarnings()
+	//		_, remaining := expression.PushDownExprs(stmtCtx, indexMergeConds, ds.ctx.GetClient(), kv.UnSpecified)
+	//		stmtCtx.SetWarnings(warnings)
+	//		if len(remaining) != 0 {
+	//			needConsiderIndexMerge = false
+	//		}
+	//	}
+	//}
 
-	if isPossibleIdxMerge && sessionAndStmtPermission && needConsiderIndexMerge && ds.tableInfo.TempTableType != model.TempTableLocal {
+	if isPossibleIdxMerge && sessionAndStmtPermission && ds.tableInfo.TempTableType != model.TempTableLocal {
 		err := ds.generateAndPruneIndexMergePath(indexMergeConds, ds.indexMergeHints != nil)
 		if err != nil {
 			return nil, err
@@ -481,9 +481,9 @@ func (ds *DataSource) generateAndPruneIndexMergePath(indexMergeConds []expressio
 	// 3. If needed, append a warning if no IndexMerge is generated.
 
 	// If without hints, it means that `enableIndexMerge` is true
-	if len(ds.indexMergeHints) == 0 {
-		return nil
-	}
+	//if len(ds.indexMergeHints) == 0 {
+	//	return nil
+	//}
 	// With hints and without generated IndexMerge paths
 	if regularPathCount == len(ds.possibleAccessPaths) {
 		ds.indexMergeHints = nil
@@ -495,18 +495,18 @@ func (ds *DataSource) generateAndPruneIndexMergePath(indexMergeConds []expressio
 
 	// Do not need to consider the regular paths in find_best_task().
 	// So we can use index merge's row count as DataSource's row count.
-	if needPrune {
-		ds.possibleAccessPaths = ds.possibleAccessPaths[regularPathCount:]
-		minRowCount := ds.possibleAccessPaths[0].CountAfterAccess
-		for _, path := range ds.possibleAccessPaths {
-			if minRowCount < path.CountAfterAccess {
-				minRowCount = path.CountAfterAccess
-			}
-		}
-		if ds.stats.RowCount > minRowCount {
-			ds.stats = ds.tableStats.ScaleByExpectCnt(minRowCount)
+	//if needPrune {
+	ds.possibleAccessPaths = ds.possibleAccessPaths[regularPathCount:]
+	minRowCount := ds.possibleAccessPaths[0].CountAfterAccess
+	for _, path := range ds.possibleAccessPaths {
+		if minRowCount < path.CountAfterAccess {
+			minRowCount = path.CountAfterAccess
 		}
 	}
+	if ds.stats.RowCount > minRowCount {
+		ds.stats = ds.tableStats.ScaleByExpectCnt(minRowCount)
+	}
+	//}
 	return nil
 }
 
@@ -799,9 +799,9 @@ func (ds *DataSource) buildIndexMergeOrPath(filters []expression.Expression, par
 // generateIndexMergeAndPaths generates IndexMerge paths for `AND` (a.k.a. intersection type IndexMerge)
 func (ds *DataSource) generateIndexMergeAndPaths(normalPathCnt int) *util.AccessPath {
 	// For now, we only consider intersection type IndexMerge when the index names are specified in the hints.
-	if !ds.indexMergeHintsHasSpecifiedIdx() {
-		return nil
-	}
+	//if !ds.indexMergeHintsHasSpecifiedIdx() {
+	//	return nil
+	//}
 
 	// 1. Collect partial paths from normal paths.
 	var partialPaths []*util.AccessPath
@@ -811,9 +811,9 @@ func (ds *DataSource) generateIndexMergeAndPaths(normalPathCnt int) *util.Access
 		if ds.possibleAccessPaths[i].IsTablePath() {
 			continue
 		}
-		if !ds.isSpecifiedInIndexMergeHints(originalPath.Index.Name.L) {
-			continue
-		}
+		//if !ds.isSpecifiedInIndexMergeHints(originalPath.Index.Name.L) {
+		//	continue
+		//}
 		// If the path contains a full range, ignore it.
 		if ranger.HasFullRange(originalPath.Ranges, false) {
 			continue
