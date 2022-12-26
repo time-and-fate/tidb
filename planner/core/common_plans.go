@@ -760,6 +760,8 @@ func (e *Explain) prepareSchema() error {
 		fieldNames = []string{"binary plan"}
 	case format == types.ExplainFormatTiDBJSON:
 		fieldNames = []string{"TiDB_JSON"}
+	case format == types.ExplainFormatWarnings:
+		fieldNames = []string{"warnings"}
 	default:
 		return errors.Errorf("explain format '%s' is not supported now", e.Format)
 	}
@@ -871,6 +873,10 @@ func (e *Explain) RenderResult() error {
 			e.Rows = append(e.Rows, []string{str})
 		} else {
 			return err
+		}
+	case types.ExplainFormatWarnings:
+		for _, warn := range e.ctx.GetSessionVars().StmtCtx.GetWarnings() {
+			e.Rows = append(e.Rows, []string{warn.Err.Error()})
 		}
 	default:
 		return errors.Errorf("explain format '%s' is not supported now", e.Format)

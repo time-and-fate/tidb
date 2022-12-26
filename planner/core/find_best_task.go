@@ -290,7 +290,7 @@ func (p *baseLogicalPlan) enumeratePhysicalPlans4Task(physicalPlans []PhysicalPl
 }
 
 // compareTaskCost compares cost of curTask and bestTask and returns whether curTask's cost is smaller than bestTask's.
-func compareTaskCost(_ sessionctx.Context, curTask, bestTask task, op *physicalOptimizeOp) (curIsBetter bool, err error) {
+func compareTaskCost(sctx sessionctx.Context, curTask, bestTask task, op *physicalOptimizeOp) (curIsBetter bool, err error) {
 	curCost, curInvalid, err := getTaskPlanCost(curTask, op)
 	if err != nil {
 		return false, err
@@ -305,6 +305,14 @@ func compareTaskCost(_ sessionctx.Context, curTask, bestTask task, op *physicalO
 	if bestInvalid {
 		return true, nil
 	}
+	sctx.GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"curTask id: %d, bestTask id: %d, curCost: %g, bestCost: %g, curCost < bestCost: %t",
+		curTask.plan().ID(),
+		bestTask.plan().ID(),
+		curCost,
+		bestCost,
+		curCost < bestCost,
+	)))
 	return curCost < bestCost, nil
 }
 

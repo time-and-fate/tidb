@@ -15,6 +15,7 @@
 package core
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/pingcap/errors"
@@ -457,21 +458,48 @@ func (p *PhysicalIndexScan) getPlanCostVer1(taskType property.TaskType, option *
 // GetCost computes the cost of index join operator and its children.
 func (p *PhysicalIndexJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost float64, costFlag uint64) float64 {
 	var cpuCost float64
+	id := p.ID()
 	sessVars := p.ctx.GetSessionVars()
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexJoin, ID:%d, outerCnt:%g, innerCnt: %g, outerCost:%g, innerCost: %g, CPU factor: %g",
+		id,
+		outerCnt,
+		innerCnt,
+		outerCost,
+		innerCost,
+		sessVars.GetCPUFactor(),
+	)))
 	// Add the cost of evaluating outer filter, since inner filter of index join
 	// is always empty, we can simply tell whether outer filter is empty using the
 	// summed length of left/right conditions.
 	if len(p.LeftConditions)+len(p.RightConditions) > 0 {
 		cpuCost += sessVars.GetCPUFactor() * outerCnt
 		outerCnt *= SelectionFactor
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexJoin, ID:%d, cpuCost: %g, updated outerCnt: %g",
+			id,
+			cpuCost,
+			outerCnt,
+		)))
 	}
 	// Cost of extracting lookup keys.
 	innerCPUCost := sessVars.GetCPUFactor() * outerCnt
 	// Cost of sorting and removing duplicate lookup keys:
 	// (outerCnt / batchSize) * (batchSize * Log2(batchSize) + batchSize) * CPUFactor
 	batchSize := math.Min(float64(p.ctx.GetSessionVars().IndexJoinBatchSize), outerCnt)
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexJoin, ID:%d, innerCPUCost: %f, batchSize: %g",
+		id,
+		innerCPUCost,
+		batchSize,
+	)))
 	if batchSize > 2 {
 		innerCPUCost += outerCnt * (math.Log2(batchSize) + 1) * sessVars.GetCPUFactor()
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexJoin, ID:%d, updated innerCPUCost 1: %g",
+			id,
+			innerCPUCost,
+		)))
 	}
 	// Add cost of building inner executors. CPU cost of building copTasks:
 	// (outerCnt / batchSize) * (batchSize * distinctFactor) * CPUFactor
@@ -480,10 +508,22 @@ func (p *PhysicalIndexJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost flo
 	// CPU cost of building hash table for inner results:
 	// (outerCnt / batchSize) * (batchSize * distinctFactor) * innerCnt * CPUFactor
 	innerCPUCost += outerCnt * distinctFactor * innerCnt * sessVars.GetCPUFactor()
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexJoin, ID:%d, updated innerCPUCost 2: %g",
+		id,
+		innerCPUCost,
+	)))
 	innerConcurrency := float64(p.ctx.GetSessionVars().IndexLookupJoinConcurrency())
 	cpuCost += innerCPUCost / innerConcurrency
 	// Cost of probing hash table in main thread.
 	numPairs := outerCnt * innerCnt
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexJoin, ID:%d, innerConcurrency: %g, updated cpuCost: %g, numPairs: %g",
+		id,
+		innerConcurrency,
+		cpuCost,
+		numPairs,
+	)))
 	if p.JoinType == SemiJoin || p.JoinType == AntiSemiJoin ||
 		p.JoinType == LeftOuterSemiJoin || p.JoinType == AntiLeftOuterSemiJoin {
 		if len(p.OtherConditions) > 0 {
@@ -491,6 +531,11 @@ func (p *PhysicalIndexJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost flo
 		} else {
 			numPairs = 0
 		}
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexJoin, ID:%d, updated numPairs: %g",
+			id,
+			numPairs,
+		)))
 	}
 	if hasCostFlag(costFlag, CostFlagUseTrueCardinality) {
 		numPairs = getOperatorActRows(p)
@@ -503,6 +548,15 @@ func (p *PhysicalIndexJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost flo
 	memoryCost := innerConcurrency * (batchSize * distinctFactor) * innerCnt * sessVars.GetMemoryFactor()
 	// Cost of inner child plan, i.e, mainly I/O and network cost.
 	innerPlanCost := outerCnt * innerCost
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexJoin, ID:%d, probeCost: %g, updated cpuCost: %g, memoryCost: %g, innerPlanCost: %g, finalCost: %g",
+		id,
+		probeCost,
+		cpuCost,
+		memoryCost,
+		innerPlanCost,
+		outerCost+innerPlanCost+cpuCost+memoryCost,
+	)))
 	if p.ctx.GetSessionVars().CostModelVersion == 2 {
 		// IndexJoin executes a batch of rows at a time, so the actual cost of this part should be
 		//  `innerCostPerBatch * numberOfBatches` instead of `innerCostPerRow * numberOfOuterRow`.
@@ -510,6 +564,11 @@ func (p *PhysicalIndexJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost flo
 		// TODO: remove this empirical value.
 		batchRatio := 30.0
 		innerPlanCost /= batchRatio
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexJoin, ID:%d, unexpected, innerPlanCost: %g",
+			id,
+			innerPlanCost,
+		)))
 	}
 	return outerCost + innerPlanCost + cpuCost + memoryCost
 }
@@ -543,21 +602,48 @@ func (p *PhysicalIndexJoin) getPlanCostVer1(taskType property.TaskType, option *
 // GetCost computes the cost of index merge join operator and its children.
 func (p *PhysicalIndexHashJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost float64, costFlag uint64) float64 {
 	var cpuCost float64
+	id := p.ID()
 	sessVars := p.ctx.GetSessionVars()
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexHashJoin, ID:%d, outerCnt:%g, innerCnt: %g, outerCost:%g, innerCost: %g, CPU factor: %g",
+		id,
+		outerCnt,
+		innerCnt,
+		outerCost,
+		innerCost,
+		sessVars.GetCPUFactor(),
+	)))
 	// Add the cost of evaluating outer filter, since inner filter of index join
 	// is always empty, we can simply tell whether outer filter is empty using the
 	// summed length of left/right conditions.
 	if len(p.LeftConditions)+len(p.RightConditions) > 0 {
 		cpuCost += sessVars.GetCPUFactor() * outerCnt
 		outerCnt *= SelectionFactor
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexHashJoin, ID:%d, cpuCost: %g, updated outerCnt: %g",
+			id,
+			cpuCost,
+			outerCnt,
+		)))
 	}
 	// Cost of extracting lookup keys.
 	innerCPUCost := sessVars.GetCPUFactor() * outerCnt
 	// Cost of sorting and removing duplicate lookup keys:
 	// (outerCnt / batchSize) * (batchSize * Log2(batchSize) + batchSize) * CPUFactor
 	batchSize := math.Min(float64(sessVars.IndexJoinBatchSize), outerCnt)
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexHashJoin, ID:%d, innerCPUCost: %g, batchSize: %g",
+		id,
+		innerCPUCost,
+		batchSize,
+	)))
 	if batchSize > 2 {
 		innerCPUCost += outerCnt * (math.Log2(batchSize) + 1) * sessVars.GetCPUFactor()
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexHashJoin, ID:%d, updated innerCPUCost 1: %g",
+			id,
+			innerCPUCost,
+		)))
 	}
 	// Add cost of building inner executors. CPU cost of building copTasks:
 	// (outerCnt / batchSize) * (batchSize * distinctFactor) * CPUFactor
@@ -565,12 +651,26 @@ func (p *PhysicalIndexHashJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost
 	innerCPUCost += outerCnt * distinctFactor * sessVars.GetCPUFactor()
 	concurrency := float64(sessVars.IndexLookupJoinConcurrency())
 	cpuCost += innerCPUCost / concurrency
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexHashJoin, ID:%d, updated innerCPUCost: %g, concurrency: %g, updated cpuCost: %g",
+		id,
+		innerCPUCost,
+		concurrency,
+		cpuCost,
+	)))
 	// CPU cost of building hash table for outer results concurrently.
 	// (outerCnt / batchSize) * (batchSize * CPUFactor)
 	outerCPUCost := outerCnt * sessVars.GetCPUFactor()
 	cpuCost += outerCPUCost / concurrency
 	// Cost of probing hash table concurrently.
 	numPairs := outerCnt * innerCnt
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexHashJoin, ID:%d, outerCPUCost: %g, updated cpuCost: %g, numPairs: %g",
+		id,
+		outerCPUCost,
+		cpuCost,
+		numPairs,
+	)))
 	if p.JoinType == SemiJoin || p.JoinType == AntiSemiJoin ||
 		p.JoinType == LeftOuterSemiJoin || p.JoinType == AntiLeftOuterSemiJoin {
 		if len(p.OtherConditions) > 0 {
@@ -578,6 +678,11 @@ func (p *PhysicalIndexHashJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost
 		} else {
 			numPairs = 0
 		}
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexHashJoin, ID:%d, updated numPairs: %g",
+			id,
+			numPairs,
+		)))
 	}
 	if hasCostFlag(costFlag, CostFlagUseTrueCardinality) {
 		numPairs = getOperatorActRows(p)
@@ -589,8 +694,18 @@ func (p *PhysicalIndexHashJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost
 	var probeCost float64
 	if outerCnt/batchSize >= concurrency {
 		probeCost = (numPairs - batchSize*innerCnt*(concurrency-1)) * sessVars.GetCPUFactor()
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexHashJoin, ID:%d, probeCost 1: %g",
+			id,
+			probeCost,
+		)))
 	} else {
 		probeCost = batchSize * innerCnt * sessVars.GetCPUFactor()
+		p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+			"PhysicalIndexHashJoin, ID:%d, probeCost 2: %g",
+			id,
+			probeCost,
+		)))
 	}
 	cpuCost += probeCost
 	// Cost of additional concurrent goroutines.
@@ -600,6 +715,15 @@ func (p *PhysicalIndexHashJoin) GetCost(outerCnt, innerCnt, outerCost, innerCost
 	memoryCost := concurrency * (batchSize * distinctFactor) * innerCnt * sessVars.GetMemoryFactor()
 	// Cost of inner child plan, i.e, mainly I/O and network cost.
 	innerPlanCost := outerCnt * innerCost
+	p.SCtx().GetSessionVars().StmtCtx.AppendWarning(errors.New(fmt.Sprintf(
+		"PhysicalIndexHashJoin, ID:%d, concurrency: %g, updated cpuCost: %g, memoryCost: %g, innerPlanCost: %g, finalCost: %g",
+		id,
+		sessVars.GetConcurrencyFactor(),
+		cpuCost,
+		memoryCost,
+		innerPlanCost,
+		outerCost+innerPlanCost+cpuCost+memoryCost,
+	)))
 	return outerCost + innerPlanCost + cpuCost + memoryCost
 }
 

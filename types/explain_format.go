@@ -37,6 +37,7 @@ var (
 	ExplainFormatTiDBJSON = "tidb_json"
 	// ExplainFormatCostTrace prints the cost and cost formula of each operator.
 	ExplainFormatCostTrace = "cost_trace"
+	ExplainFormatWarnings = "warnings"
 
 	// ExplainFormats stores the valid formats for explain statement, used by validator.
 	ExplainFormats = []string{
@@ -51,5 +52,6 @@ var (
 		ExplainFormatBinary,
 		ExplainFormatTiDBJSON,
 		ExplainFormatCostTrace,
+		ExplainFormatWarnings,
 	}
 )
